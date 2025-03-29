@@ -130,7 +130,8 @@ if (isset($data['result']['records']) && is_array($data['result']['records'])) {
     }
     
     $stmt->close();
-    echo "Data import completed!";
+    //echo "Data import completed!";
+	echo '<script>alert("Data import completed!")</script>';
 } else {
     echo "No records found in the API response";
 }

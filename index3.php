@@ -13,6 +13,17 @@ if ($conn->connect_error) {
     die("Connection failed: " . $conn->connect_error);
 }
 
+// Set timezone
+date_default_timezone_set('Asia/Hong_Kong');
+//echo date_default_timezone_get();
+$current_time = date('H:i');
+$current_day = strtolower(date('l'));
+$date = date('d/m H:i');
+$weekday = date('l');
+
+//$current_time = '12:45';
+//$current_day = 'monday';
+
 // Get unique districts and bank names for dropdowns
 $districts_sql = "SELECT DISTINCT district FROM bank_branches ORDER BY district";
 $districts_result = $conn->query($districts_sql);
@@ -43,20 +54,37 @@ if (isset($_GET['bank_name']) && !empty($_GET['bank_name'])) {
 
 // Search by service hours (still active)
 if (isset($_GET['in_service']) && $_GET['in_service'] == '1') {
-    $current_time = date('H:i'); // Current time in 24-hour format
-    $current_day = strtolower(date('l')); // Current day (e.g., "monday")
-    
-    // Complex condition to check if current time/day falls within service hours
-	/*
-    $where_clauses[] = "(
-        service_hours REGEXP '$current_day[^:]*:.*$current_time' 
-        OR service_hours NOT LIKE '%Closed on $current_day%'
-        AND service_hours NOT REGEXP '$current_day.*Closed'
-    )";
-	*/
+    // Function to check if branch is currently in service
+	function isBranchInService($service_hours, $current_day, $current_time) {
+        // Split service hours into lines
+        $lines = explode("\n", str_replace("\r", "", $service_hours));
+        $day_pattern = "/\b" . ucfirst($current_day) . "\b.*?(?:\d{2}:\d{2}.*?\d{2}:\d{2}|Closed)/i";
+        
+        foreach ($lines as $line) {
+            if (preg_match($day_pattern, $line, $matches)) {
+                $day_info = $matches[0];
+                if (stripos($day_info, 'Closed') !== false) {
+                    return false;
+                }
+                
+                // Extract time ranges (handles various formats)
+                preg_match_all('/(\d{2}:\d{2})\s*(?:-|to|\s)\s*(\d{2}:\d{2})/i', $day_info, $time_matches);
+                for ($i = 0; $i < count($time_matches[0]); $i++) {
+                    $start_time = $time_matches[1][$i];
+                    $end_time = $time_matches[2][$i];
+                    
+                    if ($current_time >= $start_time && $current_time <= $end_time) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+        return false; // No specific day found, assume closed
+    }
 }
 
-// Search by barrier free access (partial match)
+// Search by barrier free access
 if (isset($_GET['barrier_free']) && !empty($_GET['barrier_free'])) {
     $barrier_free = $conn->real_escape_string($_GET['barrier_free']);
     $where_clauses[] = "barrier_free_access LIKE ?";
@@ -64,12 +92,8 @@ if (isset($_GET['barrier_free']) && !empty($_GET['barrier_free'])) {
     $types .= "s";
 }
 
-// Build the query
-$where_clause = "";
-if (!empty($where_clauses)) {
-    $where_clause = "WHERE " . implode(" AND ", $where_clauses);
-}
-
+// Build and execute the initial query
+$where_clause = empty($where_clauses) ? "" : "WHERE " . implode(" AND ", $where_clauses);
 $sql = "SELECT * FROM bank_branches $where_clause ORDER BY id";
 $stmt = $conn->prepare($sql);
 
@@ -79,6 +103,15 @@ if (!empty($params)) {
 
 $stmt->execute();
 $result = $stmt->get_result();
+
+// Filter results for in-service branches if requested
+$filtered_result = [];
+while ($row = $result->fetch_assoc()) {
+    if (!isset($_GET['in_service']) || $_GET['in_service'] != '1' || 
+        isBranchInService($row['service_hours'], $current_day, $current_time)) {
+        $filtered_result[] = $row;
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -127,8 +160,8 @@ $result = $stmt->get_result();
 </head>
 <body>
     <h1>Hong Kong Bank Branches Information</h1>
-	<a href="create.php">New Bank</a>
-	<a href="update.php">Update</a>
+    <a href="new.php">Manage Bank Branches</a>
+    
     <!-- Search form -->
     <div class="search-container">
         <form method="GET">
@@ -163,6 +196,7 @@ $result = $stmt->get_result();
             <input type="text" name="barrier_free" id="barrier_free" value="<?php echo isset($_GET['barrier_free']) ? htmlspecialchars($_GET['barrier_free']) : ''; ?>" placeholder="e.g., Wheelchair">
 
             <button type="submit">Search</button>
+			<button type="reset">Clear</button>
         </form>
     </div>
 
@@ -183,8 +217,8 @@ $result = $stmt->get_result();
         </thead>
         <tbody>
             <?php
-            if ($result->num_rows > 0) {
-                while ($row = $result->fetch_assoc()) {
+            if (count($filtered_result) > 0) {
+                foreach ($filtered_result as $row) {
                     echo "<tr>";
                     echo "<td>" . htmlspecialchars($row['id']) . "</td>";
                     echo "<td>" . htmlspecialchars($row['bank_name']) . "</td>";
@@ -205,35 +239,8 @@ $result = $stmt->get_result();
     </table>
 
     <?php
-	
-	date_default_timezone_set('Asia/Hong_Kong');
-	$date = date('d/m h:i');
-	
-	switch (date('N')) {
-		case '1':
-		$weekday = 'Monday';
-		break;
-		case '2':
-		$weekday = 'Tuesday';
-		break;
-		case '3':
-		$weekday = 'Wednesday';
-		break;
-		case '4':
-		$weekday = 'Thursday';
-		break;
-		case '5':
-		$weekday = 'Friday';
-		break;
-		case '6':
-		$weekday = 'Saturday';
-		break;
-		case '7':
-		$weekday = 'Sunday';
-		break;
-}
-    echo "<p>Total Records: " . $result->num_rows . "</p>";
-    echo "<p>Current Time: " . $date ." (". $weekday .") ". " (Device Time)</p>";
+    echo "<p>Total Records: " . count($filtered_result) . "</p>";
+    echo "<p>Current Time: " . $date . " (" . $weekday . ") (Device Time)</p>";
 
     // Clean up
     $stmt->close();
